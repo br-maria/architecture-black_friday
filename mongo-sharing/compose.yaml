@@ -1,0 +1,139 @@
+name: mongo-sharding
+
+services:
+  # =========================
+  # CONFIG SERVER
+  # =========================
+  configsvr:
+    image: mongo:7
+    command: >
+      mongod --configsvr
+             --replSet cfgRS
+             --port 27019
+             --bind_ip_all
+    ports:
+      - "27019:27019"
+    volumes:
+      - cfg_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27019", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  # =========================
+  # SHARDS
+  # =========================
+  shard1:
+    image: mongo:7
+    command: >
+      mongod --shardsvr
+             --replSet shard1RS
+             --port 27018
+             --bind_ip_all
+    ports:
+      - "27018:27018"
+    volumes:
+      - shard1_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27018", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  shard2:
+    image: mongo:7
+    command: >
+      mongod --shardsvr
+             --replSet shard2RS
+             --port 27018
+             --bind_ip_all
+    volumes:
+      - shard2_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27018", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  # =========================
+  # MONGOS — просто запускаем и не блокируемся на его healthcheck
+  # =========================
+  mongos:
+    image: mongo:7
+    depends_on:
+      configsvr:
+        condition: service_healthy
+      shard1:
+        condition: service_healthy
+      shard2:
+        condition: service_healthy
+    command: >
+      mongos --configdb cfgRS/configsvr:27019
+             --port 27017
+             --bind_ip_all
+    ports:
+      - "27017:27017"
+    # healthcheck "заглушка": не мешает запуску bootstrap
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "true"]
+      interval: 2s
+    restart: unless-stopped
+
+  # =========================
+  # BOOTSTRAP — один идемпотентный шаг, который:
+  # 1) инициирует cfgRS/shard1RS/shard2RS (если нужно, и дождётся PRIMARY),
+  # 2) дождётся доступности mongos,
+  # 3) добавит шарды и включит шардирование somedb.helloDoc.
+  # =========================
+  bootstrap:
+    image: mongo:7
+    depends_on:
+      configsvr:
+        condition: service_healthy
+      shard1:
+        condition: service_healthy
+      shard2:
+        condition: service_healthy
+      mongos:
+        condition: service_started    # не ждём "healthy", он заглушка
+    entrypoint: ["/bin/bash","-lc"]
+    command: |
+      set -e
+
+      echo ">>> INIT cfgRS (idempotent)"
+      mongosh --host configsvr --port 27019 --eval '
+        try { rs.initiate({_id:"cfgRS",configsvr:true,members:[{_id:0,host:"configsvr:27019"}]}) } catch(e){ print(e) }'
+      mongosh --host configsvr --port 27019 --quiet --eval 'while(!rs.isMaster().ismaster){ sleep(500) }'
+
+      echo ">>> INIT shard1RS (idempotent)"
+      mongosh --host shard1 --port 27018 --eval '
+        try { rs.initiate({_id:"shard1RS",members:[{_id:0,host:"shard1:27018"}]}) } catch(e){ print(e) }'
+      mongosh --host shard1 --port 27018 --quiet --eval 'while(!rs.isMaster().ismaster){ sleep(500) }'
+
+      echo ">>> INIT shard2RS (idempotent)"
+      mongosh --host shard2 --port 27018 --eval '
+        try { rs.initiate({_id:"shard2RS",members:[{_id:0,host:"shard2:27018"}]}) } catch(e){ print(e) }'
+      mongosh --host shard2 --port 27018 --quiet --eval 'while(!rs.isMaster().ismaster){ sleep(500) }'
+
+      echo ">>> WAIT mongos responds"
+      until mongosh --host mongos --port 27017 --quiet --eval 'db.adminCommand("ping").ok' | grep -q 1; do
+        sleep 1
+      done
+
+      echo ">>> ADD shards + ENABLE sharding (idempotent)"
+      mongosh --host mongos --port 27017 --eval 'sh.addShard("shard1RS/shard1:27018")' || true
+      mongosh --host mongos --port 27017 --eval 'sh.addShard("shard2RS/shard2:27018")' || true
+      mongosh --host mongos --port 27017 --eval 'sh.enableSharding("somedb")' || true
+      mongosh --host mongos --port 27017 --eval 'sh.shardCollection("somedb.helloDoc", { _id: "hashed" })' || true
+
+      echo ">>> BOOTSTRAP DONE"
+    restart: "no"
+
+volumes:
+  cfg_data:
+    name: mongo-sharding_cfg_data
+  shard1_data:
+    name: mongo-sharding_shard1_data
+  shard2_data:
+    name: mongo-sharding_shard2_data
