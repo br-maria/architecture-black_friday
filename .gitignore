@@ -1,1 +1,58 @@
-venv
+# >>> Общие системные/скрытые файлы
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# >>> Логи и временные файлы
+*.log
+*.tmp
+*.swp
+*.swo
+
+# >>> Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# >>> Virtualenv / venv
+venv/
+.env/
+.env.local
+.env.*.local
+
+# >>> Docker / Compose
+docker-compose.override.yml
+.env.docker
+*.bak
+
+# >>> MongoDB данные — игровые/локальные тома
+data/
+mongodb/
+mongo-data/
+*.lock
+
+# >>> IDE / редакторы
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# >>> OS специфичные
+.AppleDouble
+.LSOverride
+
+# >>> Node / frontend (если будут)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# >>> Git настройки
+/.gitignore
+
+# >>> Пакеты/архивы
+*.zip
+*.tar.gz
+*.rar
