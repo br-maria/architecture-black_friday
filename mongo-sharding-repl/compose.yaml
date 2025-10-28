@@ -1,0 +1,195 @@
+name: mongo-sharding-repl
+
+services:
+  # =========================
+  # CONFIG SERVERS (CSRS)
+  # =========================
+  config1:
+    image: mongo:7
+    command: >
+      mongod --configsvr
+             --replSet cfgRS
+             --port 27019
+             --bind_ip_all
+    volumes:
+      - cfg1_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27019", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  config2:
+    image: mongo:7
+    command: >
+      mongod --configsvr
+             --replSet cfgRS
+             --port 27019
+             --bind_ip_all
+    volumes:
+      - cfg2_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27019", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  config3:
+    image: mongo:7
+    command: >
+      mongod --configsvr
+             --replSet cfgRS
+             --port 27019
+             --bind_ip_all
+    volumes:
+      - cfg3_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27019", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  # =========================
+  # SHARD1 REPLICA SET
+  # =========================
+  shard1-1:
+    image: mongo:7
+    command: >
+      mongod --shardsvr
+             --replSet shard1RS
+             --port 27018
+             --bind_ip_all
+    volumes:
+      - shard11_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27018", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  shard1-2:
+    image: mongo:7
+    command: >
+      mongod --shardsvr
+             --replSet shard1RS
+             --port 27018
+             --bind_ip_all
+    volumes:
+      - shard12_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27018", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  shard1-3:
+    image: mongo:7
+    command: >
+      mongod --shardsvr
+             --replSet shard1RS
+             --port 27018
+             --bind_ip_all
+    volumes:
+      - shard13_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27018", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  # =========================
+  # SHARD2 REPLICA SET
+  # =========================
+  shard2-1:
+    image: mongo:7
+    command: >
+      mongod --shardsvr
+             --replSet shard2RS
+             --port 27018
+             --bind_ip_all
+    volumes:
+      - shard21_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27018", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  shard2-2:
+    image: mongo:7
+    command: >
+      mongod --shardsvr
+             --replSet shard2RS
+             --port 27018
+             --bind_ip_all
+    volumes:
+      - shard22_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27018", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  shard2-3:
+    image: mongo:7
+    command: >
+      mongod --shardsvr
+             --replSet shard2RS
+             --port 27018
+             --bind_ip_all
+    volumes:
+      - shard23_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "27018", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+      start_period: 10s
+
+  # =========================
+  # MONGOS (только сервис; всю инициализацию делает init.sh)
+  # =========================
+  mongos:
+    image: mongo:7
+    depends_on:
+      config1:
+        condition: service_healthy
+      config2:
+        condition: service_healthy
+      config3:
+        condition: service_healthy
+      shard1-1:
+        condition: service_healthy
+      shard2-1:
+        condition: service_healthy
+    command: >
+      mongos --configdb cfgRS/config1:27019,config2:27019,config3:27019
+             --port 27017
+             --bind_ip_all
+    ports:
+      - "27017:27017"   # если занят, поменяйте на "27027:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--host", "127.0.0.1", "--port", "27017", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 180
+      start_period: 30s
+
+volumes:
+  cfg1_data:
+  cfg2_data:
+  cfg3_data:
+  shard11_data:
+  shard12_data:
+  shard13_data:
+  shard21_data:
+  shard22_data:
+  shard23_data:
