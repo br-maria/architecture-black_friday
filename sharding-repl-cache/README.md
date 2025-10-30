@@ -1,147 +1,121 @@
-# Mongo Sharding + Репликация
+# Sharding + Replica + Cache Demo
 
-## Описание проекта
-
-Этот проект демонстрирует настройку **шардированного кластера MongoDB** с **репликацией**.  
-Каждый шард (shard1RS, shard2RS) развёрнут в виде **Replica Set** из трёх узлов:  
-один PRIMARY и два SECONDARY.  
-Конфигурационные серверы (config1–3) объединены в отдельный Replica Set `cfgRS`.
-
-Система собирается и инициализируется автоматически через `docker compose` и `make`.
+Проект демонстрирует полный стек:
+- Шардированный кластер MongoDB (2 шарда × 3 реплики + 3 config-сервера + mongos router)  
+- Redis для кэширования  
+- Приложение на FastAPI (порт 8080)  
+- Полная автоматизация запуска через один скрипт `init.sh`
 
 ---
 
-## Требования
+## Структура проекта
 
-Перед началом можно проверить, что установлены:
-- Docker ≥ 24
-- Docker Compose ≥ 2.20
-- GNU Make ≥ 4.0
-- Порт **27017** (или **27027**) на хосте свободен
+```
+.
+├── api_app/
+│   ├── app.py                # FastAPI приложение
+│   ├── requirements.txt
+│   └── Dockerfile
+├── compose.yaml              # docker compose для всех сервисов
+└── init.sh                   # единый сценарий запуска и инициализации
+```
+
 
 ---
 
-## Шаги запуска
+## Быстрый старт
 
-**Перейти в каталог проекта:**
-```bash
-cd mongo-sharding-repl
-```
+1. Сделать скрипт исполняемым:
+   ```bash
+   chmod +x ./init.sh
+   ```
 
-**Запустить весь кластер:**
-```bash
-make up
-```
+2. Запустить всё одной командой:
+   ```bash
+   ./init.sh
+   ```
 
-Этот шаг:
-- запускает все контейнеры MongoDB;
-- инициализирует Replica Set для каждого шарда и config-сервера;
-- запускает `mongos`;
-- добавляет шарды в кластер и включает шардирование для БД `somedb`.
+   Скрипт автоматически:
+   - соберёт и запустит все контейнеры;
+   - инициализирует реплики config- и shard-кластеров;
+   - подключит шарды к `mongos`;
+   - включит шардирование для базы `somedb` и коллекции `helloDoc`;
+   - перезапустит `app` и `redis` после готовности кластера;
+   - проверит доступность API по HTTP.
 
-Среднее время развёртывания: 2–3 минуты.
+3. Проверить состояние сервисов:
+   ```bash
+   docker compose ps
+   ```
 
----
-
-## Проверка состояния
-
-**Проверка статус всех Replica Set’ов:**
-```bash
-make status
-```
-
-Ожидаемый результат:
-```
-cfgRS: 1
-s1-1: 1
-s1-2: 2
-s1-3: 2
-s2-1: 1
-s2-2: 2
-s2-3: 2
-```
-Где:
-- `1` — PRIMARY,
-- `2` — SECONDARY.
+   Все контейнеры должны быть в состоянии `Up`, `mongos` — `healthy`.
 
 ---
 
-## Тестирование кластера
+## Проверка MongoDB
 
-**Запустить встроенный тест:**
+Посмотреть шард-конфигурацию:
 ```bash
-make test
+docker compose exec -T mongos mongosh --port 27017 --quiet --eval 'sh.status().shards'
 ```
 
-Что делает тест:
-- очищает коллекцию `somedb.helloDoc`;
-- вставляет 20 000 документов;
-- выводит общее количество документов и распределение по шардам.
-
-Ожидаемый результат:
-```
-Всего: 20000
-Shard shard1RS ... docs: ~10000
-Shard shard2RS ... docs: ~10000
+Создать тестовые данные:
+```bash
+docker compose exec -T mongos mongosh --port 27017 --quiet <<'EOF'
+use somedb
+for (let i=0;i<10;i++) db.helloDoc.insertOne({msg:"test", i})
+db.helloDoc.getShardDistribution()
+EOF
 ```
 
 ---
 
-## Проверка репликации вручную
+## Проверка Redis и кэширования
 
-**Проверить роли нод:**
+Очистить кэш:
 ```bash
-docker compose exec -T shard1-1 mongosh --port 27018 --quiet --eval 'printjson(rs.status().members.map(m=>({name:m.name,stateStr:m.stateStr})))'
+docker compose exec -T redis redis-cli FLUSHALL
 ```
 
-**Добавить документ через mongos (PRIMARY):**
+Сделать два запроса к API:
 ```bash
-docker compose exec -T mongos mongosh --quiet --eval '
-const d=db.getSiblingDB("somedb");
-d.helloDoc.insertOne({_id:43000,msg:"replica-test"});
-print("Inserted:", d.helloDoc.findOne({_id:43000}).msg);
-'
+curl -s -w "\nfirst:  %{time_total}s\n"  -o /dev/null http://localhost:8080/hello-count
+curl -s -w "\nsecond: %{time_total}s\n" -o /dev/null http://localhost:8080/hello-count
 ```
 
-**Проверить, где лежит документ:**
+Во втором запросе ответ должен быть быстрее, а в Redis-мониторе появятся `SET` и `GET`.
+
+---
+
+## Полезные команды
+
+Остановить всё:
 ```bash
-docker compose exec -T mongos mongosh --quiet --eval '
-const d=db.getSiblingDB("somedb");
-printjson(d.helloDoc.find({_id:43000}).explain("executionStats").queryPlanner.winningPlan.shards);
-'
+docker compose down
 ```
 
-**Прочитать документ с SECONDARY на этом шарде:**
+Удалить все данные и запустить заново:
 ```bash
-docker compose exec -T shard2-2 mongosh --port 27018 --quiet --eval '
-db.getMongo().setReadPref("secondaryPreferred");
-const d=db.getSiblingDB("somedb");
-print("Secondary sees:", d.helloDoc.findOne({_id:43000})?.msg);
-'
+docker compose down -v
+./init.sh
+```
+
+Посмотреть логи приложения:
+```bash
+docker compose logs -f app
+```
+
+Посмотреть Swagger (если включён):
+```
+http://localhost:8080/docs
 ```
 
 ---
 
-## Проверка отказоустойчивости
+## Порты
 
-```bash
-docker compose exec -T shard1-1 mongosh --port 27018 --quiet --eval 'rs.stepDown(60)'
-docker compose exec -T shard1-1 mongosh --port 27018 --quiet --eval 'printjson(rs.status().members.map(m=>({name:m.name,stateStr:m.stateStr})))'
-```
-
-Ожидаемый результат:
-```
-shard1-2: PRIMARY
-shard1-1: SECONDARY
-```
-
----
-
-##Завершение работы
-
-```bash
-make down
-```
-
----
-
+| Сервис | Порт хоста | Назначение |
+|--------|-------------|------------|
+| app    | 8080        | HTTP API |
+| mongos | 27017       | Точка входа MongoDB |
+| redis  | 6379        | Кэш |
