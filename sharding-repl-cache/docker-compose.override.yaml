@@ -1,0 +1,21 @@
+services:
+  app:
+    build: ./api_app
+    command: >
+      uvicorn app:app
+      --host 0.0.0.0
+      --port 8000
+      --log-level info
+    environment:
+      MONGO_URI: "mongodb://mongos:27017"
+      REDIS_URL: "redis://redis:6379"
+      UVICORN_HOST: "0.0.0.0"
+      UVICORN_PORT: "8000"
+    depends_on:
+      mongos:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8000"
+    restart: unless-stopped
